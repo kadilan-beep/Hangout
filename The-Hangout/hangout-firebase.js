@@ -54,7 +54,9 @@ class Query {
   orderBy(f, d) { return new Query(this._q.orderBy(f, d)); }
   limit(n) { return new Query(this._q.limit(Math.min(n, MAX_LIMIT))); }
   get() { return this._q.get().then(wq); }
-  onSnapshot(next, err) { return this._q.onSnapshot(s => { next && next(wq(s)); }, e => { if (!quiet(e)) console.warn("Hangout:", e); err && err(e); }); }
+  // includeMetadataChanges: tells The Hangout when the saved copy has been checked with the server
+  // (otherwise it can get stuck on "Still connecting…").
+  onSnapshot(next, err) { return this._q.onSnapshot({ includeMetadataChanges: true }, s => { next && next(wq(s)); }, e => { if (!quiet(e)) console.warn("Hangout:", e); err && err(e); }); }
 }
 class Col extends Query {
   constructor(ref) { super(ref); this._ref = ref; this.id = ref.id; }
@@ -74,7 +76,7 @@ class Doc {
   }
   delete() { return this._r.delete(); }
   get() { return this._r.get().then(wd); }
-  onSnapshot(next, err) { return this._r.onSnapshot(s => { next && next(wd(s)); }, e => { err && err(e); }); }
+  onSnapshot(next, err) { return this._r.onSnapshot({ includeMetadataChanges: true }, s => { next && next(wd(s)); }, e => { err && err(e); }); }
   collection(n) { return new Col(this._r.collection(n)); }
   // A short "lock" the claude.ai database had. Here the security rules stop two people taking the same username.
   async acquire() { return { acquired: true, release: async () => {} }; }
