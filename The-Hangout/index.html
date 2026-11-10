@@ -1019,7 +1019,7 @@ $("#memeUse").onclick=async()=>{
 /* ---------- topics ---------- */
 function postsIn(){ return S.posts.filter(p=>!hidden(p.authorKey)&&(S.topic==="all"||tid(p.topic)===S.topic)); }
 function msgsIn(){ return S.msgs.filter(m=>!hidden(m.authorKey)&&(S.topic==="all"||tid(m.topic)===S.topic)); }
-function setTopic(id){ if(!isZone(id)) S.lastTopic=id; S.topic=id; if(isZone(id) && S.tab==="people") S.tab="feed";
+function setTopic(id){ if(id==="study") id="all"; if(!isZone(id)) S.lastTopic=id; S.topic=id; if(isZone(id) && S.tab==="people") S.tab="feed";
   renderTopics(); renderFeed(); renderChat(); showView(); scrollChat();
   try{ store("hangout-topic",id); }catch(e){} }
 function renderTopics(){
@@ -1027,7 +1027,6 @@ function renderTopics(){
   const mk=(id,label)=>{ const c=el("button","chip"+(S.topic===id?" on":""),label); c.onclick=()=>setTopic(id); bar.append(c); return c; };
   mk("all","🌟 Everything").dataset.id="all";
   const unsolved=(typeof ST!=="undefined")?ST.qs.filter(q=>!q.solved).length:0;
-  mk("study","📚 Study"+(unsolved?"  "+unsolved:"")).dataset.id="study";
   const myTurns=(typeof arcadeTurnCount==="function")?arcadeTurnCount():0;
   mk("arcade","🕹️ Arcade"+(myTurns?"  "+myTurns:"")).dataset.id="arcade";
   const ringing=(typeof incomingCalls==="function")?incomingCalls().length:0;
@@ -1388,7 +1387,7 @@ function renderPeople(){
 /* ---------- start ---------- */
 (async function start(){
   S.chatMode=["public","friends","groups"].includes(store("hangout-chatmode"))?store("hangout-chatmode"):"public";
-  S.topic=store("hangout-topic")||"all"; if(S.topic==="general") S.topic="all"; S.lastTopic=isZone(S.topic)?"all":S.topic;
+  S.topic=store("hangout-topic")||"all"; if(S.topic==="general"||S.topic==="study") S.topic="all"; S.lastTopic=isZone(S.topic)?"all":S.topic;
   $("#chatTopic").onchange=e=>store("hangout-chattopic",e.target.value); S.font=fontOf(store("hangout-font")).id; renderTopics(); applyTypingFont(); showView();
   const [db,user,assets]=await Promise.all([claude.use("db"),claude.use("user"),claude.use("assets")]);
   if(!db){ status("Couldn't connect to The Hangout. Check your internet and reload the page."); $("#composeCard").hidden=true; $("#chatForm").hidden=true; renderFeed(); return; }
@@ -1711,7 +1710,7 @@ async function initStudy(){
   S.db.collection("studysets").orderBy("createdAt","desc").limit(200).onSnapshot(snap=>{ ST.sets=list(snap).filter(s=>Array.isArray(s.items)); if(S.topic==="study") renderSets(); }, fail);
   renderStudy();
 }
-if(S.ready) initStudy(); else window.addEventListener("hangout-ready",()=>initStudy(),{once:true});
+/* Study zone turned off: its data isn't loaded. */
 
 </script>
 <script>
@@ -1941,7 +1940,7 @@ function renderProfile(){
   if(m.bio && !X.profileEdit) hero.append(el("div","pbio",m.bio)); box.append(hero);
   const st=studyScore(k); const posts=S.posts.filter(p=>p.authorKey===k);
   const stats=el("div","pstats");
-  for(const [n,l] of [[posts.length,"posts"],[st.total,"study pts"],[st.streak+(st.streak?" 🔥":""),"day streak"]]){ const s=el("div"); s.append(el("b",null,String(n)), el("span",null,l)); stats.append(s); }
+  for(const [n,l] of [[posts.length,"posts"],[S.posts.filter(p=>p.authorKey===k&&p.poll).length,"polls"],[(S.msgs||[]).filter(x=>x.authorKey===k).length,"chats"]]){ const s=el("div"); s.append(el("b",null,String(n)), el("span",null,l)); stats.append(s); }
   box.append(stats);
   hook("profileMid",box,k,me,m);
   if(me){
@@ -2055,7 +2054,6 @@ const TOUR=[
   ["👋","Welcome to The Hangout!","A private place for you and your friends to post, chat, play and study together."],
   ["🌟","Topics","Use the buttons at the top (Movies, Food, Games…) to see posts and chats about one thing. Red dots mean something new!"],
   ["💬","Feed and Chat","Feed is for posts that stay up: photos, memes 🤣, polls 📊 and the ☀️ question of the day. Chat is for talking live, with friends-only chats and 👥 group chats."],
-  ["📚","Study","Tap 📚 Study to ask for homework help, make practice quizzes and flashcards, earn points and build a 🔥 streak."],
   ["👯","Friends","Add friends by their @username. Tap anyone's picture to see their profile. Make your own profile by tapping your name at the top."],
   ["🛡️","Stay safe","Be kind! If someone is mean, tap ⚑ to report it or 🚫 block them from their profile. Never share passwords, your address or other private info."]];
 function openTour(){ X.tourI=0; renderTour(); $("#tourModal").classList.add("open"); }
@@ -2085,7 +2083,7 @@ async function initExtras(){
   db.collection("votes").onSnapshot(s=>{ X.votes=list(s); renderFeed(); renderChat(); },nop);
   db.collection("qotd").where("day","==",dayKey()).onSnapshot(s=>{ X.qotd=list(s); if(S.topic==="all") renderFeed(); },nop);
   db.collection("qotdq").onSnapshot(s=>{ X.qotdq={}; for(const d of s.docs) X.qotdq[d.id]=d.data(); if(S.topic==="all") renderFeed(); },nop);
-  db.collection("quizdone").orderBy("createdAt","desc").limit(1000).onSnapshot(s=>{ X.quizdone=list(s); if(S.topic==="study") x_studyStats(); },nop);
+  X.quizdone=[];
   db.collection("bans").onSnapshot(s=>{ S.banned=new Set(s.docs.map(d=>d.id)); if(S.isOwner) S.banned.delete(S.key);
     if(iAmBanned()){ S.readOnly=true; applyReadOnly(); status("The owner has turned off posting for you."); }
     rerenderAll(); },nop);
@@ -2561,10 +2559,6 @@ function badgesFor(k){
     ["meme","🤣","Meme Lord","Share 5 memes",memes>=5],
     ["poll","📊","Pollster","Make a poll",polls>=1],
     ["fave","⭐","Crowd Favourite","Get 10 likes or reactions",received>=10],
-    ["help","🙋","Helper","Answer 3 homework questions",answers.length>=3],
-    ["hero","🦸","Homework Hero","Have 3 answers marked helpful",best>=3],
-    ["quiz","🧠","Quiz Whiz","Finish 5 quizzes or flashcard decks",quizzes>=5],
-    ["fire","🔥","On Fire","Study 3 days in a row",st.streak>=3],
     ["volc","🌋","Unstoppable","Study 7 days in a row",st.streak>=7],
     ["gamer","🎮","Gamer","Finish 5 arcade games",games.length>=5],
     ["champ","🏆","Champion","Win 5 arcade games",wins>=5],
