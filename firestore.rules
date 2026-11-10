@@ -1,0 +1,75 @@
+rules_version = '2';
+// Security rules for The Hangout.
+// Copy ALL of this into Firebase console → Firestore Database → Rules, then click Publish.
+// What they do:
+//  • You must be signed in to use anything.
+//  • You can only change YOUR OWN profile.
+//  • Usernames can't be stolen: once someone has one, nobody else can take it.
+//  • You can only read chats you're a member of, and only send messages as yourself.
+//  • You can only start a 1-on-1 chat with someone who accepted your friend request.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function me() { return request.auth.uid; }
+    function pair(a, b) { return a < b ? a + '_' + b : b + '_' + a; }
+    function areFriends(a, b) {
+      let path = /databases/$(database)/documents/friendreqs/$(pair(a, b));
+      return exists(path) && get(path).data.status == 'accepted';
+    }
+
+    // Profiles
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && me() == uid
+        && request.resource.data.keys().hasOnly(['name','username','av','emoji','color','bio','status','createdAt','lastSeen'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 40
+        && (!('bio' in request.resource.data) || (request.resource.data.bio is string && request.resource.data.bio.size() <= 160));
+      allow delete: if false;
+
+      // Private settings (like who you blocked). Only you can see these.
+      match /private/{docId} {
+        allow read, write: if signedIn() && me() == uid;
+      }
+    }
+
+    // Usernames (so each @username belongs to only one person)
+    match /usernames/{name} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == me() && name.matches('^[a-z0-9_]{3,20}$');
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.uid == me();
+    }
+
+    // Friend requests
+    match /friendreqs/{id} {
+      allow read: if signedIn() && (resource.data.from == me() || resource.data.to == me());
+      allow create: if signedIn() && request.resource.data.from == me() && request.resource.data.to != me()
+        && request.resource.data.status == 'pending' && id == pair(request.resource.data.from, request.resource.data.to);
+      allow update: if signedIn() && resource.data.to == me() && request.resource.data.status == 'accepted'
+        && request.resource.data.from == resource.data.from && request.resource.data.to == resource.data.to;
+      allow delete: if signedIn() && (resource.data.from == me() || resource.data.to == me());
+    }
+
+    // Chats (1-on-1 and groups)
+    match /chats/{chatId} {
+      allow read: if signedIn() && me() in resource.data.members;
+      allow create: if signedIn() && request.resource.data.createdBy == me() && me() in request.resource.data.members
+        && request.resource.data.members.size() <= 30
+        && (request.resource.data.type == 'group'
+            || (request.resource.data.type == 'dm' && request.resource.data.members.size() == 2
+                && areFriends(request.resource.data.members[0], request.resource.data.members[1])));
+      allow update: if signedIn() && me() in resource.data.members && request.resource.data.type == resource.data.type;
+      allow delete: if false;
+
+      match /messages/{msgId} {
+        allow read: if signedIn() && me() in get(/databases/$(database)/documents/chats/$(chatId)).data.members;
+        allow create: if signedIn() && request.resource.data.by == me()
+          && me() in get(/databases/$(database)/documents/chats/$(chatId)).data.members
+          && request.resource.data.text is string && request.resource.data.text.size() <= 2000;
+        allow update: if false;
+        allow delete: if signedIn() && resource.data.by == me();
+      }
+    }
+  }
+}
