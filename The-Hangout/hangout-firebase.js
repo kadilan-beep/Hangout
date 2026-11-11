@@ -99,7 +99,7 @@ const myGroups = { ids: [], subs: new Set(), un: null,
 // Many small listeners merged into one list
 function merged(makeQueries, sortKey, cap, next) {
   const parts = new Map(); let alive = true; const listeners = new Map();
-  const emit = () => { if (!alive) return; const all = new Map(); for (const docs of parts.values()) for (const d of docs) all.set(d.id, d);
+  const emit = () => { if (!alive) return; for (const k of listeners.keys()) if (!parts.has(k)) return; const all = new Map(); for (const docs of parts.values()) for (const d of docs) all.set(d.id, d);
     let docs = [...all.values()].sort((a, b) => ((b.data()[sortKey] || 0) - (a.data()[sortKey] || 0))); if (cap) docs = docs.slice(0, cap); next(fakeSnap(docs)); };
   const sync = qs => { const want = new Map(qs.map(([k, q]) => [k, q]));
     for (const [k, un] of listeners) if (!want.has(k)) { un(); listeners.delete(k); parts.delete(k); }
@@ -108,6 +108,14 @@ function merged(makeQueries, sortKey, cap, next) {
   const stop = makeQueries(sync);
   return () => { alive = false; stop && stop(); for (const un of listeners.values()) un(); };
 }
+// One shared "my friends" list (from accepted friend requests)
+const myFriends = { ids: [], subs: new Set(), started: false, parts: { a: [], b: [] },
+  watch(cb) { this.subs.add(cb);
+    if (!this.started) { this.started = true; const upd = () => { const ids = [...this.parts.a, ...this.parts.b]; this.ids = [...new Set(ids)]; this.subs.forEach(f => f(this.ids)); };
+      fs.collection(PFX + "friendreqs").where("from", "==", UID).onSnapshot(s => { this.parts.a = s.docs.map(d => d.data()).filter(r => r.status === "accepted").map(r => r.to); upd(); }, () => {});
+      fs.collection(PFX + "friendreqs").where("to", "==", UID).onSnapshot(s => { this.parts.b = s.docs.map(d => d.data()).filter(r => r.status === "accepted").map(r => r.from); upd(); }, () => {});
+    } else cb(this.ids);
+    return () => this.subs.delete(cb); } };
 const gmsgGroup = new Map(); // message id -> group id
 class Virtual {
   constructor(kind) { this.kind = kind; this._cap = 0; }
@@ -119,6 +127,12 @@ class Virtual {
         fs.collection(PFX + "groups").doc(g).collection("msgs").orderBy("createdAt", "desc").limit(150)]))), "createdAt", this._cap || 800,
       s => { s.docs.forEach(d => gmsgGroup.set(d.id, d.data().groupId)); next(s); });
     if (k === "friendreqs") return merged(sync => { sync([["from", fs.collection(PFX + "friendreqs").where("from", "==", UID)], ["to", fs.collection(PFX + "friendreqs").where("to", "==", UID)]]); }, "createdAt", 0, next);
+    if (k === "plans") return merged(sync => { let g = [], f = [];
+        const go = () => sync([["mine", fs.collection(PFX + "plans").where("host", "==", UID)],
+          ...f.map(x => ["f" + x, fs.collection(PFX + "plans").where("host", "==", x).where("vis", "==", "friends")]),
+          ...g.map(x => ["g" + x, fs.collection(PFX + "plans").where("groupId", "==", x).where("vis", "==", "group")])]);
+        const u1 = myGroups.watch(ids => { g = ids; go(); }), u2 = myFriends.watch(ids => { f = ids; go(); }); return () => { u1(); u2(); }; },
+      "when", this._cap || 300, s => next(fakeSnap([...s.docs].reverse())));
     if (k === "calls") return merged(sync => myGroups.watch(ids => sync([["host", fs.collection(PFX + "calls").where("host", "==", UID)], ["to", fs.collection(PFX + "calls").where("to", "==", UID)],
         ...ids.map(g => ["g" + g, fs.collection(PFX + "calls").where("to", "==", g)])])), "createdAt", this._cap || 100, next);
   }
@@ -131,7 +145,7 @@ class Virtual {
     return fs.collection(PFX + this.kind).add(enc(o)).then(r => new Doc(r));
   }
 }
-const VIRTUAL = ["groupmsgs", "friendreqs", "calls"];
+const VIRTUAL = ["groupmsgs", "friendreqs", "calls", "plans"];
 const db = {
   collection: n => VIRTUAL.includes(n) ? new Virtual(n) : new Col(fs.collection(PFX + n)),
   doc: p => new Doc(fs.doc(PFX + String(p).replace(/^\/+/, ""))),

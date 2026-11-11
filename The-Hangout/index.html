@@ -2507,7 +2507,8 @@ function x_feedMore(feed){
 function planRow(p){ const row=el("div","plan"); const now=Date.now(); const happening=p.when<=now;
   const left=el("div","pdate"); const d=new Date(p.when); left.append(el("b",null,String(d.getDate())), el("span",null,d.toLocaleDateString([], {month:"short"}).toUpperCase())); row.append(left);
   const mid=el("div","gmid"); const t=el("div","name",(p.emoji||"📅")+" "+p.title); mid.append(t);
-  mid.append(el("div","uh",(happening?"🔴 Happening now":whenText(p.when))+(p.place?" · 📍 "+p.place:"")+" · by "+who(p.host).name));
+  const pv=p.vis==="friends"?"👯 Friends":p.vis==="group"?"👥 "+(((S.groups.find(x=>x.id===p.groupId)||{}).name)||"Group"):p.vis==="public"?"🌍 Everyone":"🔒 Only you";
+  mid.append(el("div","uh",(happening?"🔴 Happening now":whenText(p.when))+(p.place?" · 📍 "+p.place:"")+" · by "+who(p.host).name+" · "+pv));
   if(p.desc) mid.append(el("div","pdesc",p.desc));
   const rs=p.rsvp||{}; const going=Object.keys(rs).filter(k=>rs[k]==="going"&&!hidden(k)), maybe=Object.keys(rs).filter(k=>rs[k]==="maybe"&&!hidden(k));
   const av=el("div","pgoing"); going.slice(0,8).forEach(k=>av.append(avatar(k,null,true))); av.append(el("span","uh",going.length+" going"+(maybe.length?" · "+maybe.length+" maybe":""))); mid.append(av);
@@ -2530,11 +2531,11 @@ function openPlan(){ if(!S.me.name){ openName(); return; }
   const when=el("input","field"); when.type="datetime-local"; when.value=d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate())+"T19:00"; f.append(when);
   const place=el("input","field"); place.placeholder="📍 Where? (optional, e.g. online, the park)"; place.maxLength=60; f.append(place);
   const desc=el("input","field"); desc.placeholder="Details (optional)"; desc.maxLength=200; f.append(desc);
-  f.append(el("div","time","Who can see it?")); let vis="friends"; const vb=el("div");
+  f.append(el("div","time","Who can see it?")); let vis="me"; const vb=el("div");
   const gsel=el("select","field"); for(const g of S.groups){ const o=el("option",null,(g.emoji||"👥")+" "+(g.name||"Group")); o.value=g.id; gsel.append(o); }
-  const drawVis=()=>{ vb.replaceChildren(); for(const [v,l] of [["friends","👯 My friends"],["group","👥 One of my group chats"],["public","🌍 Everyone at The Hangout"]]){ const lab=el("label","pick"); const r=el("input"); r.type="radio"; r.name="pvis"; r.checked=vis===v; r.onchange=()=>{ vis=v; drawVis(); }; lab.append(r,el("span",null,l)); vb.append(lab); } gsel.hidden=vis!=="group"; };
+  const drawVis=()=>{ vb.replaceChildren(); for(const [v,l] of [["me","🔒 Only me"],["friends","👯 My friends"],["group","👥 One of my group chats"]]){ const lab=el("label","pick"); const r=el("input"); r.type="radio"; r.name="pvis"; r.checked=vis===v; r.onchange=()=>{ vis=v; drawVis(); }; lab.append(r,el("span",null,l)); vb.append(lab); } gsel.hidden=vis!=="group"; };
   drawVis(); f.append(vb,gsel);
-  f.append(el("div","time small2","Tip: don't put your home address here. Meet at public places or online."));
+  f.append(el("div","time small2","Only the people you pick can see this plan. Tip: don't put your home address here. Meet at public places or online."));
   const err=el("div","msgline bad"); f.append(err);
   const r=el("div","row"); r.append(el("span","spacer")); const c=el("button","ghost","Cancel"); c.type="button"; c.onclick=()=>m.classList.remove("open"); const s=el("button","btn","Post plan"); s.type="submit"; r.append(c,s); f.append(r);
   f.onsubmit=async e=>{ e.preventDefault(); const t=title.value.trim(); const ts=new Date(when.value).getTime();
