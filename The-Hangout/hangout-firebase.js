@@ -82,8 +82,58 @@ class Doc {
   async acquire() { return { acquired: true, release: async () => {} }; }
   async release() {}
 }
+/* ---------- private data: only the right people can load it ----------
+   - Group chat messages live INSIDE each group (hg_groups/<id>/msgs), and only members can read them.
+   - Friend requests: you only load the ones you sent or got.
+   - Calls: you only load calls you started, calls to you, and calls in your groups.
+   The Hangout code still asks for "groupmsgs", "friendreqs" and "calls"; these stand-ins gather the allowed pieces. */
+let UID = null;
+const fakeSnap = docs => ({ docs, size: docs.length, empty: !docs.length, metadata: { fromCache: false, hasPendingWrites: false },
+  forEach: f => docs.forEach(f), docChanges: () => docs.map(d => ({ type: "added", doc: d })) });
+const plainDoc = (id, data) => ({ id, exists: true, data: () => dec(data) });
+// One shared "my groups" listener
+const myGroups = { ids: [], subs: new Set(), un: null,
+  watch(cb) { this.subs.add(cb); if (!this.un) this.un = fs.collection(PFX + "groups").where("members", "array-contains", UID).onSnapshot(s => {
+      this.ids = s.docs.map(d => d.id); this.subs.forEach(f => f(this.ids)); }, () => {}); else cb(this.ids);
+    return () => this.subs.delete(cb); } };
+// Many small listeners merged into one list
+function merged(makeQueries, sortKey, cap, next) {
+  const parts = new Map(); let alive = true; const listeners = new Map();
+  const emit = () => { if (!alive) return; const all = new Map(); for (const docs of parts.values()) for (const d of docs) all.set(d.id, d);
+    let docs = [...all.values()].sort((a, b) => ((b.data()[sortKey] || 0) - (a.data()[sortKey] || 0))); if (cap) docs = docs.slice(0, cap); next(fakeSnap(docs)); };
+  const sync = qs => { const want = new Map(qs.map(([k, q]) => [k, q]));
+    for (const [k, un] of listeners) if (!want.has(k)) { un(); listeners.delete(k); parts.delete(k); }
+    for (const [k, q] of want) if (!listeners.has(k)) listeners.set(k, q.onSnapshot(s => { parts.set(k, s.docs.map(d => plainDoc(d.id, d.data()))); emit(); }, () => { parts.set(k, []); emit(); }));
+    emit(); };
+  const stop = makeQueries(sync);
+  return () => { alive = false; stop && stop(); for (const un of listeners.values()) un(); };
+}
+const gmsgGroup = new Map(); // message id -> group id
+class Virtual {
+  constructor(kind) { this.kind = kind; this._cap = 0; }
+  orderBy() { return this; } where() { return this; } limit(n) { this._cap = n; return this; }
+  get() { return new Promise(res => { const un = this.onSnapshot(s => { setTimeout(() => un(), 0); res(s); }); }); }
+  onSnapshot(next) {
+    const k = this.kind;
+    if (k === "groupmsgs") return merged(sync => myGroups.watch(ids => sync(ids.map(g => ["g" + g,
+        fs.collection(PFX + "groups").doc(g).collection("msgs").orderBy("createdAt", "desc").limit(150)]))), "createdAt", this._cap || 800,
+      s => { s.docs.forEach(d => gmsgGroup.set(d.id, d.data().groupId)); next(s); });
+    if (k === "friendreqs") return merged(sync => { sync([["from", fs.collection(PFX + "friendreqs").where("from", "==", UID)], ["to", fs.collection(PFX + "friendreqs").where("to", "==", UID)]]); }, "createdAt", 0, next);
+    if (k === "calls") return merged(sync => myGroups.watch(ids => sync([["host", fs.collection(PFX + "calls").where("host", "==", UID)], ["to", fs.collection(PFX + "calls").where("to", "==", UID)],
+        ...ids.map(g => ["g" + g, fs.collection(PFX + "calls").where("to", "==", g)])])), "createdAt", this._cap || 100, next);
+  }
+  doc(id) {
+    if (this.kind === "groupmsgs") { const g = gmsgGroup.get(String(id)); return new Doc(g ? fs.collection(PFX + "groups").doc(g).collection("msgs").doc(String(id)) : fs.collection(PFX + "gone").doc(String(id))); }
+    return new Doc(id ? fs.collection(PFX + this.kind).doc(String(id)) : fs.collection(PFX + this.kind).doc());
+  }
+  add(o) {
+    if (this.kind === "groupmsgs") return fs.collection(PFX + "groups").doc(String(o.groupId)).collection("msgs").add(enc(o)).then(r => { gmsgGroup.set(r.id, o.groupId); return new Doc(r); });
+    return fs.collection(PFX + this.kind).add(enc(o)).then(r => new Doc(r));
+  }
+}
+const VIRTUAL = ["groupmsgs", "friendreqs", "calls"];
 const db = {
-  collection: n => new Col(fs.collection(PFX + n)),
+  collection: n => VIRTUAL.includes(n) ? new Virtual(n) : new Col(fs.collection(PFX + n)),
   doc: p => new Doc(fs.doc(PFX + String(p).replace(/^\/+/, ""))),
 };
 
@@ -157,19 +207,19 @@ async function alertUser(title, body, tag) {
     if (reg) await reg.showNotification(title, opt); else new Notification(title, opt); } catch (e) {}
 }
 function startAlerts(uid) {
-  const groups = new Map(); let first = { g: true, r: true };
+  const groups = new Map(); let first = { g: true, r: true }; const seenG = new Set(), seenR = new Set();
   fs.collection(PFX + "groups").where("members", "array-contains", uid).onSnapshot(s => { groups.clear(); s.docs.forEach(d => groups.set(d.id, d.data())); }, () => {});
-  fs.collection(PFX + "groupmsgs").orderBy("createdAt", "desc").limit(MAX_LIMIT).onSnapshot(s => {
-    if (first.g) { first.g = false; return; }
-    for (const c of s.docChanges()) { if (c.type !== "added") continue; const m = c.doc.data(); const g = groups.get(m.groupId);
+  db.collection("groupmsgs").orderBy("createdAt", "desc").limit(800).onSnapshot(s => {
+    for (const d of s.docs) { if (seenG.has(d.id)) continue; seenG.add(d.id); if (first.g) continue; const m = d.data(); const g = groups.get(m.groupId);
       if (!g || m.authorKey === uid || Date.now() - (m.createdAt || 0) > 120e3) continue;
       alertUser((m.name || "Someone") + " in " + (g.name || "your group"), String(m.text || "📷 Sent something").slice(0, 120), "g-" + m.groupId); }
-  }, () => {});
-  fs.collection(PFX + "friendreqs").onSnapshot(s => {
-    if (first.r) { first.r = false; return; }
-    for (const c of s.docChanges()) { if (c.type !== "added") continue; const r = c.doc.data(); if (r.to !== uid || (r.status && r.status !== "pending")) continue;
+    if (s.docs.length || groups.size === 0) setTimeout(() => { first.g = false; }, 4000);
+  });
+  db.collection("friendreqs").onSnapshot(s => {
+    for (const d of s.docs) { if (seenR.has(d.id)) continue; seenR.add(d.id); if (first.r) continue; const r = d.data(); if (r.to !== uid || (r.status && r.status !== "pending")) continue;
       const n = (membersCache[r.from] && membersCache[r.from].name) || "Someone"; alertUser("👋 New friend request", n + " wants to be your friend!", "fr"); }
-  }, () => {});
+    setTimeout(() => { first.r = false; }, 3000);
+  });
 }
 function notifyPrompt() {
   if (!("Notification" in window) || Notification.permission !== "default" || store("hg-notify-asked")) return;
@@ -237,7 +287,7 @@ let started = false;
 gateView("loading");
 auth.onAuthStateChanged(async u => {
   if (!u) { if (started) { location.reload(); return; } gateView("auth"); return; }
-  if (started) return; started = true;
+  if (started) return; started = true; UID = u.uid;
   const isOwner = (await sha(String(u.email || "").trim().toLowerCase())) === OWNER_HASH;
   const user = { me: async () => ({ id: u.uid, isOwner, name: null, color: null, email: u.email }), can: async () => true };
   window.__hgResolve({ db, user, assets, room: makeRoom(u.uid), sample: null });

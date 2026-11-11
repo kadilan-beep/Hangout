@@ -1320,7 +1320,7 @@ $("#groupForm").onsubmit=async e=>{ e.preventDefault(); const err=$("#groupErr")
 async function leaveGroup(g){
   const rest=g.members.filter(k=>k!==S.key);
   try{ if(rest.length) await S.db.collection("groups").doc(g.id).update({members:rest});
-    else { await S.db.collection("groups").doc(g.id).delete(); for(const m of groupMsgs(g.id)) await S.db.collection("groupmsgs").doc(m.id).delete(); }
+    else { for(const m of groupMsgs(g.id)) await S.db.collection("groupmsgs").doc(m.id).delete().catch(()=>{}); await S.db.collection("groups").doc(g.id).delete(); }
     S.group=null; renderChat(); toast("You left "+(g.name||"the group")); }catch(err){ handleWriteError(err); } }
 
 /* ---------- friends ---------- */
