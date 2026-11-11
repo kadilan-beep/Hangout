@@ -133,6 +133,8 @@ class Virtual {
           ...g.map(x => ["g" + x, fs.collection(PFX + "plans").where("groupId", "==", x).where("vis", "==", "group")])]);
         const u1 = myGroups.watch(ids => { g = ids; go(); }), u2 = myFriends.watch(ids => { f = ids; go(); }); return () => { u1(); u2(); }; },
       "when", this._cap || 300, s => next(fakeSnap([...s.docs].reverse())));
+    if (k === "fmsgs") return merged(sync => myFriends.watch(ids => sync([["mine", fs.collection(PFX + "fmsgs").where("authorKey", "==", UID)],
+        ...ids.map(f => ["f" + f, fs.collection(PFX + "fmsgs").where("authorKey", "==", f)])])), "createdAt", this._cap || 400, next);
     if (k === "calls") return merged(sync => myGroups.watch(ids => sync([["host", fs.collection(PFX + "calls").where("host", "==", UID)], ["to", fs.collection(PFX + "calls").where("to", "==", UID)],
         ...ids.map(g => ["g" + g, fs.collection(PFX + "calls").where("to", "==", g)])])), "createdAt", this._cap || 100, next);
   }
@@ -145,7 +147,7 @@ class Virtual {
     return fs.collection(PFX + this.kind).add(enc(o)).then(r => new Doc(r));
   }
 }
-const VIRTUAL = ["groupmsgs", "friendreqs", "calls", "plans"];
+const VIRTUAL = ["groupmsgs", "friendreqs", "calls", "plans", "fmsgs"];
 const db = {
   collection: n => VIRTUAL.includes(n) ? new Virtual(n) : new Col(fs.collection(PFX + n)),
   doc: p => new Doc(fs.doc(PFX + String(p).replace(/^\/+/, ""))),

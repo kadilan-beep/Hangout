@@ -1019,13 +1019,19 @@ $("#memeUse").onclick=async()=>{
     if(blob){ if(!S.assets) throw {code:"x"}; const a=await S.assets.upload(blob); spec.imageId=a.id; delete spec.e; }
     const base={authorKey:S.key,name:S.me.name,text:"",meme:spec,font:S.font,createdAt:Date.now()};
     if(S.chatMode==="groups" && S.group) await S.db.collection("groupmsgs").add({groupId:S.group,...base});
-    else await S.db.collection("messages").add({...base,topic:S.topic==="all"?($("#chatTopic").value||"random"):S.topic});
+    else await S.db.collection(chatColl()).add({...base,topic:S.topic==="all"?($("#chatTopic").value||"random"):S.topic});
   }catch(err){ handleWriteError(err); }
   btn.disabled=false; };
 
 /* ---------- topics ---------- */
 function postsIn(){ return S.posts.filter(p=>!hidden(p.authorKey)&&(S.topic==="all"||tid(p.topic)===S.topic)); }
 function msgsIn(){ return S.msgs.filter(m=>!hidden(m.authorKey)&&(S.topic==="all"||tid(m.topic)===S.topic)); }
+// Friends-only chat: private messages only your friends can see, separate for each topic
+function fmsgsIn(){ const f=friendSet(); return (S.fmsgs||[]).filter(m=>!hidden(m.authorKey)&&(m.authorKey===S.key||f.has(m.authorKey))&&(S.topic==="all"||tid(m.topic)===S.topic)); }
+// Group chats belong to the topic they were made in
+function groupTopic(g){ return (g&&g.topic)||"all"; }
+function topicGroups(){ return S.groups.filter(g=>groupTopic(g)===S.topic); }
+function chatColl(){ return S.chatMode==="friends"?"fmsgs":"messages"; }
 function setTopic(id){ if(id==="study") id="all"; if(!isZone(id)) S.lastTopic=id; S.topic=id; if(isZone(id) && S.tab==="people") S.tab="feed";
   renderTopics(); renderFeed(); renderChat(); showView(); scrollChat();
   try{ store("hangout-topic",id); }catch(e){} }
@@ -1223,7 +1229,8 @@ function renderChat(){
   document.querySelectorAll("#chatSeg button").forEach(b=>b.classList.toggle("on",b.dataset.mode===S.chatMode));
   const box=$("#msgs"), head=$("#chatHead"), form=$("#chatForm"), input=$("#chatInput");
   const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<80; box.replaceChildren(); head.replaceChildren();
-  let g=S.chatMode==="groups" && S.group ? S.groups.find(x=>x.id===S.group) : null;
+  let g=S.chatMode==="groups" && S.group ? topicGroups().find(x=>x.id===S.group) : null;
+  if(S.chatMode==="groups" && S.group && !g && S.groups.some(x=>x.id===S.group)) S.group=null;
   if(g && S.justCreated===g.id) S.justCreated=null;
   if(S.chatMode==="groups" && S.group && !g){
     if(S.justCreated===S.group){ head.hidden=true; form.hidden=true; const e=el("div","empty"); e.append(el("b",null,"Setting up your group…")); box.append(e); return; }
@@ -1232,11 +1239,11 @@ function renderChat(){
   // ----- list of group chats -----
   if(S.chatMode==="groups" && !g){
     head.hidden=false; form.hidden=true;
-    head.append(el("div","name","👥 Your group chats"), el("span","spacer"));
+    head.append(el("div","name","👥 Your "+(S.topic==="all"?"":topicOf(S.topic).name+" ")+"group chats"), el("span","spacer"));
     if(!S.readOnly){ const nb=el("button","btn small","＋ New group"); nb.onclick=()=>openGroup(null); head.append(nb); }
-    if(!S.groups.length){ const e=el("div","empty"); e.append(el("b",null,"No group chats yet"),
+    if(!topicGroups().length){ const e=el("div","empty"); e.append(el("b",null,"No group chats in "+(S.topic==="all"?"🌟 Everything":topicOf(S.topic).emoji+" "+topicOf(S.topic).name)+" yet"),
       friendSet().size>1?"Make one and pick which friends to add!":"Add some friends with the 👯 Friends button at the top, then make a group chat with them."); box.append(e); return; }
-    const sorted=S.groups.slice().sort((a,b)=>{ const la=groupMsgs(a.id).slice(-1)[0], lb=groupMsgs(b.id).slice(-1)[0];
+    const sorted=topicGroups().sort((a,b)=>{ const la=groupMsgs(a.id).slice(-1)[0], lb=groupMsgs(b.id).slice(-1)[0];
       return ((lb&&lb.createdAt)||b.createdAt||0)-((la&&la.createdAt)||a.createdAt||0); });
     for(const x of sorted){ const row=el("button","grow"); row.type="button"; row.onclick=()=>{ S.group=x.id; renderChat(); scrollChat(); updateBadge(); };
       row.append(el("div","gemoji",x.emoji||"👥")); const mid=el("div","gmid"); mid.append(el("div","name",x.name||"Group chat"));
@@ -1268,22 +1275,21 @@ function renderChat(){
 
   // ----- public / friends-only topic chat -----
   head.hidden=true;
-  let msgs=msgsIn();
+  let msgs=S.chatMode==="friends"?fmsgsIn():msgsIn();
   const ct=$("#chatTopic"); ct.hidden=S.topic!=="all";
   input.placeholder=S.topic==="all"?"Say something…":"Chat about "+topicOf(S.topic).name.toLowerCase()+"…";
-  if(S.chatMode==="friends"){ const f=friendSet(); msgs=msgs.filter(m=>f.has(m.authorKey)); }
   if(!msgs.length){ const e=el("div","empty");
-    if(S.chatMode==="friends") e.append(el("b",null,"Nothing from your friends here yet"), friendSet().size>1?"When your friends chat in this topic, you'll see it here.":"Add friends with the 👯 Friends button at the top to fill this up!");
+    if(S.chatMode==="friends") e.append(el("b",null,"🔒 Your friends-only chat"), friendSet().size>1?"Only your friends can see messages here, and each topic has its own. Say hi!":"Add friends with the 👯 Friends button at the top, then chat here privately!");
     else e.append(el("b",null,"No messages yet"),"Say hi to everyone 👋");
     box.append(e); return; }
-  let prev=null; for(const m of msgs){ box.append(messageRow(m,prev,"messages",S.topic==="all")); prev=m; }
+  let prev=null; for(const m of msgs){ box.append(messageRow(m,prev,chatColl(),S.topic==="all")); prev=m; }
   if(atBottom || (msgs.length && msgs[msgs.length-1].authorKey===S.key)) scrollChat();
 }
 $("#chatForm").onsubmit=async e=>{ e.preventDefault(); const i=$("#chatInput"); const t=i.value.trim(); if(!t) return;
   if(!S.me.name){ openName(); return; } i.value="";
   try{
     if(S.chatMode==="groups" && S.group) await S.db.collection("groupmsgs").add({groupId:S.group,authorKey:S.key,name:S.me.name,text:t,font:S.font,createdAt:Date.now()});
-    else await S.db.collection("messages").add({authorKey:S.key,name:S.me.name,text:t,topic:S.topic==="all"?($("#chatTopic").value||"random"):S.topic,font:S.font,createdAt:Date.now()});
+    else await S.db.collection(chatColl()).add({authorKey:S.key,name:S.me.name,text:t,topic:S.topic==="all"?($("#chatTopic").value||"random"):S.topic,font:S.font,createdAt:Date.now()});
   }catch(err){ handleWriteError(err); i.value=t; } };
 
 /* ---------- group chats ---------- */
@@ -1312,7 +1318,7 @@ $("#groupForm").onsubmit=async e=>{ e.preventDefault(); const err=$("#groupErr")
       await S.db.collection("groups").doc(g.id).update({members:[...new Set(g.members.concat(picked))]});
     } else {
       const name=$("#groupName").value.trim().slice(0,30)||"Group chat";
-      const ref=await S.db.collection("groups").add({name,emoji:S.groupEmojiSel,members:[S.key,...picked],createdBy:S.key,createdAt:Date.now()});
+      const ref=await S.db.collection("groups").add({name,emoji:S.groupEmojiSel,members:[S.key,...picked],createdBy:S.key,topic:isZone(S.topic)?"all":S.topic,createdAt:Date.now()});
       S.chatMode="groups"; S.group=ref.id; S.justCreated=ref.id;
     }
     $("#groupModal").classList.remove("open"); renderChat();
@@ -1418,6 +1424,7 @@ function renderPeople(){
   db.collection("friendreqs").onSnapshot(snap=>{ S.reqs=list(snap).filter(r=>r.from===S.key||r.to===S.key); renderPeople(); if(S.chatMode==="friends") renderChat(); }, fail);
   db.collection("groups").where("members","array-contains",S.key).onSnapshot(snap=>{
     S.groups=list(snap).filter(g=>Array.isArray(g.members)); renderChat(); updateBadge(); }, fail);
+  S.fmsgs=[]; db.collection("fmsgs").orderBy("createdAt","desc").limit(400).onSnapshot(snap=>{ S.fmsgs=list(snap).reverse(); if(S.tab==="chat"&&S.chatMode==="friends") renderChat(); },()=>{});
   db.collection("groupmsgs").orderBy("createdAt","desc").limit(800).onSnapshot(snap=>{
     S.gmsgs=list(snap).reverse(); if(S.tab==="chat"&&S.chatMode==="groups") renderChat(); updateBadge(); }, fail);
   db.collection("posts").orderBy("createdAt","desc").limit(500).onSnapshot(snap=>{ S.posts=list(snap); if(!snap.metadata.fromCache) done(); renderTopics(); renderFeed(); }, fail);
@@ -1855,7 +1862,7 @@ function chatPollOpts(n){ const box=$("#chatPollOpts"); const vals=[...box.query
 $("#chatPollBtn").onclick=()=>{ if(S.readOnly||!S.db) return; if(!S.me.name){ openName(); return; }
   const g=S.chatMode==="groups"&&S.group?S.groups.find(x=>x.id===S.group):null;
   const topic=S.topic==="all"?topicOf($("#chatTopic").value||"random"):topicOf(S.topic);
-  $("#chatPollWhere").textContent=g?"Goes to the group "+(g.name||"chat")+".":"Goes to the "+topic.emoji+" "+topic.name+" chat"+(S.chatMode==="friends"?" (everyone can see and vote)":"")+".";
+  $("#chatPollWhere").textContent=g?"Goes to the group "+(g.name||"chat")+".":"Goes to the "+topic.emoji+" "+topic.name+" chat"+(S.chatMode==="friends"?" (only your friends can see and vote)":"")+".";
   $("#chatPollQ").value=""; $("#chatPollOpts").replaceChildren(); chatPollOpts(2); $("#chatPollErr").textContent="";
   $("#chatPollModal").classList.add("open"); setTimeout(()=>$("#chatPollQ").focus(),50); };
 $("#chatPollAdd").onclick=()=>chatPollOpts((X.cpCount||2)+1);
@@ -1867,7 +1874,7 @@ $("#chatPollForm").onsubmit=async e=>{ e.preventDefault();
   $("#chatPollModal").classList.remove("open");
   const base={authorKey:S.key,name:S.me.name,text:q,poll:{options:opts.slice(0,6)},font:S.font,createdAt:Date.now()};
   try{ if(S.chatMode==="groups"&&S.group) await S.db.collection("groupmsgs").add({groupId:S.group,...base});
-    else await S.db.collection("messages").add({...base,topic:S.topic==="all"?($("#chatTopic").value||"random"):S.topic});
+    else await S.db.collection(chatColl()).add({...base,topic:S.topic==="all"?($("#chatTopic").value||"random"):S.topic});
     scrollChat(); }catch(err){ handleWriteError(err); } };
 
 /* ---------- reactions ---------- */
@@ -2042,7 +2049,7 @@ function renderOwner(){ const c=$("#ownerCard"); c.hidden=!S.isOwner; if(!S.isOw
     const sn=el("div","quote",'"'+(r.snippet||"")+'"'); box.append(sn);
     box.append(el("div","time","Posted by "+who(r.targetKey).name+(S.members[r.targetKey]&&S.members[r.targetKey].username?" (@"+S.members[r.targetKey].username+")":"")+(r.note?" · Note: "+r.note:"")));
     const row=el("div","row rw");
-    const ok=["posts","comments","messages","groupmsgs","help","answers","qotd","plans"].includes(r.coll);
+    const ok=["posts","comments","messages","fmsgs","groupmsgs","help","answers","qotd","plans"].includes(r.coll);
     if(ok){ const rm=el("button","btn small","Remove it"); rm.onclick=async()=>{ try{ await S.db.collection(r.coll).doc(r.docId).delete(); await S.db.collection("reports").doc(r.id).delete(); toast("Removed."); }catch(e){ handleWriteError(e); } }; row.append(rm); }
     if(r.targetKey && r.targetKey!==S.key){ const bn=el("button","ghost small",S.banned.has(r.targetKey)?"Unban":"Ban "+who(r.targetKey).name); bn.onclick=()=>setBan(r.targetKey,!S.banned.has(r.targetKey)); row.append(bn); }
     const dis=el("button","link","Dismiss"); dis.onclick=()=>S.db.collection("reports").doc(r.id).delete().catch(handleWriteError); row.append(dis);
